@@ -57,7 +57,7 @@ namespace MiniPokerSolver
             return new Strategy(tab);
         }
 
-        public Strategy Twiddle(int hands, int spots=4)
+        public Strategy Twiddle(int hands, int spots = 4)
         {
             var tab = new double[hands][];
             foreach (var h in Enumerable.Range(0, hands))
@@ -70,18 +70,49 @@ namespace MiniPokerSolver
             }
             int hand = System.Random.Shared.Next(0, hands);
             int spot = System.Random.Shared.Next(0, spots);
-            double delta = (System.Random.Shared.NextDouble() - 0.5) * 0.01; // A random double between -0.005 and 0.005; 
 
+            double delta = (System.Random.Shared.NextDouble() - 0.5) * 0.01;
             var v = tab[hand][spot];
             v += delta;
-            v = Math.Max(v, 0.001);
-            v = Math.Min(v, 0.999);
-
+            v = Math.Max(v, 0.0001);
+            v = Math.Min(v, 0.9999);
             tab[hand][spot] = v;
-            return new Strategy(tab);
 
-            
+            return new Strategy(tab);
         }
+
+        public Strategy Twiddle2D(int hands, int spots = 4)
+        {
+            var tab = new double[hands][];
+            foreach (var h in Enumerable.Range(0, hands))
+            {
+                tab[h] = new double[spots];
+                foreach (var s in Enumerable.Range(0, spots))
+                {
+                    tab[h][s] = Table[h][s];
+                }
+            }
+            int hand2 = System.Random.Shared.Next(1, hands);
+            int hand1 = hand2 - 1;
+            int spot = System.Random.Shared.Next(0, spots);
+
+            double delta = (System.Random.Shared.NextDouble() - 0.5) * 0.0005;
+            var v = tab[hand1][spot];
+            v += delta;
+            v = Math.Max(v, 0.0001);
+            v = Math.Min(v, 0.9999);
+            tab[hand1][spot] = v;
+
+            delta = (System.Random.Shared.NextDouble() - 0.5) * 0.0005;
+            v = tab[hand2][spot];
+            v += delta;
+            v = Math.Max(v, 0.0001);
+            v = Math.Min(v, 0.9999);
+            tab[hand2][spot] = v;
+
+            return new Strategy(tab);
+        }
+
 
         public override string ToString()
         {
@@ -125,6 +156,15 @@ namespace MiniPokerSolver
                     //Console.WriteLine("Updated A, value is now " + value);
                 }
 
+                trialA = A.Twiddle2D(cards);
+                trialVal = Evaluate(trialA, B);
+                if (trialVal > value)
+                {
+                    value = trialVal;
+                    A = trialA;
+                    //Console.WriteLine("Updated A, value is now " + value);
+                }
+
                 var trialB = B.Twiddle(cards);
                 trialVal = Evaluate(A, trialB);
                 if (trialVal < value)
@@ -134,7 +174,16 @@ namespace MiniPokerSolver
                     //Console.WriteLine("Updated B, value is now " + value);
                 }
 
-                if( i % 1000 == 0)
+                trialB = B.Twiddle2D(cards);
+                trialVal = Evaluate(A, trialB);
+                if (trialVal < value)
+                {
+                    value = trialVal;
+                    B = trialB;
+                    //Console.WriteLine("Updated B, value is now " + value);
+                }
+
+                if ( i % 1000 == 0)
                 {
                     Console.WriteLine("Best Strategy for A (First to act):\n" + A.ToString());
                     Console.WriteLine("Best Strategy for B (Last to act):\n" + B.ToString());

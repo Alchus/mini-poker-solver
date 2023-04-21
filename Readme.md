@@ -41,4 +41,27 @@ Call Raise: 1.00 , 0.85 , 0.75 , 0.37 , 0.09 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 
 
 ## Commentary
 
+This solution does demonstrate the concept of polarized and protected ranges. For example, Player A checks with 77% of Aces in order to have strong hands to balance out some check-raise bluffs. 
+
+As expected, calling ranges are fully linear, because there is no further betting rounds to protect value for.
+
 This solution is a close approximation, but it has some non-linear entries that are unlikely to be optimal. For example, Player A calls a raise with more Jacks(14%) than Queens(9%). This is likely because the annealing process only tweaks one variable at a time, and the evaluation is significantly more responsive to the total number of calls made with either a Jack or Queen than the exact distribution between the two cards. Thus, any change to the strategy in only one dimension is not an advantage. This could be improved by adjusting the annealing process to attempt to "pull" or "push" probability mass to neighboring card ranks in a given spot.
+
+## Updated:
+
+```
+Best Strategy for A (First to act):
+            A      K      Q      J      10     9      8      7      6      5      4      3      2
+       Bet: 0.10 , 1.00 , 0.01 , 0.66 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.36 , 0.19 ,
+  Continue: 1.00 , 1.00 , 1.00 , 1.00 , 1.00 , 0.52 , 0.91 , 0.72 , 0.70 , 0.10 , 0.16 , 0.00 , 0.00 ,
+     Raise: 1.00 , 1.00 , 0.00 , 0.00 , 0.00 , 0.18 , 0.01 , 0.07 , 0.10 , 0.18 , 0.22 , 0.32 , 1.00 ,
+Call Raise: 1.00 , 1.00 , 0.17 , 0.20 , 0.05 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 ,
+
+Best Strategy for B (Second to act):
+            A      K      Q      J      10     9      8      7      6      5      4      3      2
+       Bet: 1.00 , 1.00 , 1.00 , 1.00 , 0.49 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.54 , 1.00 ,
+  Continue: 1.00 , 1.00 , 1.00 , 1.00 , 0.93 , 0.80 , 0.67 , 0.41 , 0.97 , 0.19 , 0.11 , 0.00 , 0.00 ,
+     Raise: 1.00 , 0.34 , 0.00 , 0.00 , 0.06 , 0.18 , 0.21 , 0.05 , 0.05 , 0.66 , 0.22 , 0.97 , 1.00 ,
+Call Raise: 1.00 , 0.78 , 0.67 , 0.35 , 0.33 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 , 0.00 ,
+
+```

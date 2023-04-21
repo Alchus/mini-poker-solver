@@ -8,7 +8,7 @@
 
             var solver = new Solver();
 
-            (var A, var B) = solver.Solve_Anneal(iterations:5000000, cards:13);
+            (var A, var B) = solver.Solve_Anneal(iterations:2000000, cards:13);
 
             //Console.WriteLine(A);
             //Console.WriteLine(B);
