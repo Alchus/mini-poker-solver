@@ -17,7 +17,7 @@ namespace MiniPokerSolver
                                                        "  Continue", 
                                                        "     Raise", 
                                                        "Call Raise" };
-        public static string CardNames =>  "            A      K      Q      J      10     9      8      7      6      5      4      3      2" ;
+        public static string CardNames =>  "            A       K       Q       J       10      9       8       7       6       5       4       3       2" ;
     }
 
     public struct Strategy
@@ -28,6 +28,18 @@ namespace MiniPokerSolver
         {
             this.Table = Table;
         }
+
+        public Strategy DeepCopy()
+        {
+            var newTable = new double[Table.Length][];
+            for (int i = 0; i < Table.Length; i++)
+            {
+                newTable[i] = new double[Table[i].Length];
+                Array.Copy(Table[i], newTable[i], Table[i].Length);
+            }
+            return new Strategy(newTable);
+        }
+
         public static Strategy Uniform(int hands, int spots)
         {
             var tab = new double[hands][];
@@ -81,38 +93,7 @@ namespace MiniPokerSolver
             return new Strategy(tab);
         }
 
-        public Strategy Twiddle2D(int hands, int spots = 4)
-        {
-            var tab = new double[hands][];
-            foreach (var h in Enumerable.Range(0, hands))
-            {
-                tab[h] = new double[spots];
-                foreach (var s in Enumerable.Range(0, spots))
-                {
-                    tab[h][s] = Table[h][s];
-                }
-            }
-            int hand2 = System.Random.Shared.Next(1, hands);
-            int hand1 = hand2 - 1;
-            int spot = System.Random.Shared.Next(0, spots);
-
-            double delta = (System.Random.Shared.NextDouble() - 0.5) * 0.0005;
-            var v = tab[hand1][spot];
-            v += delta;
-            v = Math.Max(v, 0.0001);
-            v = Math.Min(v, 0.9999);
-            tab[hand1][spot] = v;
-
-            delta = (System.Random.Shared.NextDouble() - 0.5) * 0.0005;
-            v = tab[hand2][spot];
-            v += delta;
-            v = Math.Max(v, 0.0001);
-            v = Math.Min(v, 0.9999);
-            tab[hand2][spot] = v;
-
-            return new Strategy(tab);
-        }
-
+        
 
         public override string ToString()
         {
@@ -127,7 +108,7 @@ namespace MiniPokerSolver
                 sb.Append(Constants.Descriptions[s] + ": ");
                 foreach (var h in Enumerable.Range(0, hands))
                 {
-                    sb.Append(Table[h][s].ToString("0.00") + " , ");
+                    sb.Append(Table[h][s].ToString("0.000") + " , ");
                 }
                 sb.Append("\n");
             }
@@ -139,7 +120,7 @@ namespace MiniPokerSolver
     public class Solver
     {
 
-        public (Strategy A, Strategy B) Solve_Anneal(int iterations = 1000 , int cards = 3, int spots = 4)
+        public (Strategy A, Strategy B) Solve_RandomWalk(int iterations = 1001 , int cards = 3, int spots = 4)
         {
             Strategy A = Strategy.Random(cards, spots);
             Strategy B = Strategy.Random(cards, spots);
@@ -156,15 +137,7 @@ namespace MiniPokerSolver
                     //Console.WriteLine("Updated A, value is now " + value);
                 }
 
-                trialA = A.Twiddle2D(cards);
-                trialVal = Evaluate(trialA, B);
-                if (trialVal > value)
-                {
-                    value = trialVal;
-                    A = trialA;
-                    //Console.WriteLine("Updated A, value is now " + value);
-                }
-
+              
                 var trialB = B.Twiddle(cards);
                 trialVal = Evaluate(A, trialB);
                 if (trialVal < value)
@@ -174,14 +147,6 @@ namespace MiniPokerSolver
                     //Console.WriteLine("Updated B, value is now " + value);
                 }
 
-                trialB = B.Twiddle2D(cards);
-                trialVal = Evaluate(A, trialB);
-                if (trialVal < value)
-                {
-                    value = trialVal;
-                    B = trialB;
-                    //Console.WriteLine("Updated B, value is now " + value);
-                }
 
                 if ( i % 1000 == 0)
                 {
@@ -199,6 +164,160 @@ namespace MiniPokerSolver
             return (A, B);
         }
 
+        public (Strategy A, Strategy B) Solve_Iterative(int iterations = 1000, int cards = 3, int spots = 4, double temperature = 0.1, double coolingRate = 0.997, double minimumTemperature = 0.00001){
+            Strategy A = Strategy.Uniform(cards, spots);
+            Strategy B = Strategy.Uniform(cards, spots);
+
+
+            for (int i = 0; i < iterations; i++)
+            {
+                if (temperature < minimumTemperature)
+                {
+                    Console.WriteLine($"Stopping early at iteration {i} - temperature {temperature} below minimum {minimumTemperature}");
+                    break;
+                }
+
+                int entriesUpdatedThisIteration = 0;
+                double currentValue = Evaluate(A, B);
+                double startingValueForA = currentValue;
+                foreach (var h in Enumerable.Range(0, cards))
+                {
+
+                    // For each hand h and spot s, calculate the improvement in payoff if we increase the value at that position.
+                    // Also calculate the improvement in payoff if we decrease the value at that position.
+                    // if the value is already at 0.99999 or 0.00001, then skip increasing/decreasing it
+                    // If only one of the two improvements is positive, then we move in that direction.
+                    // If both are positive, we move in the direction that has the highest improvement.
+                    // If both are negative, we do nothing.
+
+                    foreach (var s in Enumerable.Range(0, spots))
+                    {
+                        Strategy trialA_add = A.DeepCopy();
+                        Strategy trialA_sub = A.DeepCopy();
+                        var delta = temperature;
+
+                        // ADD to A
+                        double improvement_add_A = 0;
+                        double trialVal_add = currentValue;
+                        if (trialA_add.Table[h][s] < 1){
+                            trialA_add.Table[h][s] = Math.Min( 1, trialA_add.Table[h][s] + delta);
+                            trialVal_add = Evaluate(trialA_add, B);
+                            improvement_add_A = trialVal_add - currentValue;
+                        }
+                        
+                        // Do the same for subtracting from A
+                        double improvement_sub_A = 0;           
+                        double trialVal_sub = currentValue;
+                        if (trialA_sub.Table[h][s] > 0.0){
+                            trialA_sub.Table[h][s] = Math.Max( 0.0, trialA_sub.Table[h][s] - delta);
+                            trialVal_sub = Evaluate(trialA_sub, B);
+                            improvement_sub_A = trialVal_sub - currentValue;
+                        }
+
+                        if (improvement_add_A > 0 && improvement_sub_A > 0) // Both are improvements
+                        {
+                            // Move in the direction that has the highest improvement.
+                            if (improvement_add_A > improvement_sub_A)
+                            {
+                                A = trialA_add;
+                                currentValue = trialVal_add;
+                                entriesUpdatedThisIteration++;
+                            } else {
+                                A = trialA_sub;
+                                currentValue = trialVal_sub;
+                                entriesUpdatedThisIteration++;
+                            }
+                        } else if (improvement_add_A > 0) // Only Adding is an improvement
+                        {
+                            A = trialA_add;
+                            currentValue = trialVal_add;
+                            entriesUpdatedThisIteration++;
+                        } else if (improvement_sub_A > 0) // Only Subtracting is an improvement
+                        {
+                            A = trialA_sub;
+                            currentValue = trialVal_sub;
+                            entriesUpdatedThisIteration++;
+                        }
+                    }
+                                        
+                }
+
+                double endingValueForA = currentValue;
+
+                // Do the same for B
+                foreach (var h in Enumerable.Range(0, cards))
+                {
+                    foreach (var s in Enumerable.Range(0, spots))
+                    {
+                        Strategy trialB_add = B.DeepCopy();
+                        Strategy trialB_sub = B.DeepCopy();
+                        var delta = temperature;
+
+                        // ADD to B
+                        double improvement_add_B = 0;
+                        double trialVal_add = currentValue;
+                        if (trialB_add.Table[h][s] < 1){
+                            trialB_add.Table[h][s] = Math.Min(1, trialB_add.Table[h][s] + delta);
+                            trialVal_add = Evaluate(A, trialB_add);
+                            improvement_add_B = currentValue - trialVal_add; // Note: reversed since B wants to minimize
+                        }
+                        
+                        // Do the same for subtracting from B
+                        double improvement_sub_B = 0;           
+                        double trialVal_sub = currentValue;
+                        if (trialB_sub.Table[h][s] > 0.0){
+                            trialB_sub.Table[h][s] = Math.Max(0.0, trialB_sub.Table[h][s] - delta);
+                            trialVal_sub = Evaluate(A, trialB_sub);
+                            improvement_sub_B = currentValue - trialVal_sub; // Note: reversed since B wants to minimize
+                        }
+
+                        if (improvement_add_B > 0 && improvement_sub_B > 0) // Both are improvements
+                        {
+                            // Move in the direction that has the highest improvement
+                            if (improvement_add_B > improvement_sub_B)
+                            {
+                                B = trialB_add;
+                                currentValue = trialVal_add;
+                                entriesUpdatedThisIteration++;
+                            } else {
+                                B = trialB_sub;
+                                currentValue = trialVal_sub;
+                                entriesUpdatedThisIteration++;
+                            }
+                        } else if (improvement_add_B > 0) // Only Adding is an improvement
+                        {
+                            B = trialB_add;
+                            currentValue = trialVal_add;
+                            entriesUpdatedThisIteration++;
+                        } else if (improvement_sub_B > 0) // Only Subtracting is an improvement
+                        {
+                            B = trialB_sub;
+                            currentValue = trialVal_sub;
+                            entriesUpdatedThisIteration++;
+                        }
+                    }
+                }
+
+                if (i % 100 == 0)
+                {
+                    Console.WriteLine("Iteration " + i + ", Temperature: " + temperature + ", Entries Updated: " + entriesUpdatedThisIteration);
+                    Console.WriteLine("     A strategy starting value: " + startingValueForA + ", ending value: " + endingValueForA + ", change: " + (endingValueForA - startingValueForA));
+                }
+
+                if (entriesUpdatedThisIteration == 0)
+                {
+                    Console.WriteLine("No improvements this iteration (" + i + "). Temperature: " + temperature);
+                    // Skip the normal cooling for this iteration since we're doing a more aggressive cool
+                    temperature = Math.Pow(temperature, 10);
+                }
+                else 
+                {
+                    temperature *= coolingRate;
+                }
+            }
+
+            return (A, B);
+        }
 
         public (Strategy A, Strategy B) Solve_MonteCarlo(int iterations = 1000, int cards = 3, int spots = 4)
         {
@@ -261,6 +380,7 @@ namespace MiniPokerSolver
 
         public double Evaluate(Strategy A, Strategy B) {
 
+            // Odds of reaching each outcome, for each player
             (Func<double, double>[] pathA, Func<double, double>[] pathB) S0 = (new Func<double, double>[] { No, _, _, _ },    new Func<double, double>[] { No, _, _, _ });
             (Func<double, double>[] pathA, Func<double, double>[] pathB) S1 = (new Func<double, double>[] { No, No, _, _ },   new Func<double, double>[] { Yes, _, _, _ });
             (Func<double, double>[] pathA, Func<double, double>[] pathB) S2 = (new Func<double, double>[] { No, Yes, No, _ },    new Func<double, double>[] { Yes, _, _, _ });
@@ -281,6 +401,8 @@ namespace MiniPokerSolver
                     if (handA == handB) continue;
 
                     //Console.WriteLine($"---I have:{handA}, Opponent has:{handB}");
+
+                    //Value of each state, for player A
                     var values = new[]
                     {
                         ShowdownValue(handA, handB, Constants.Ante, 0),// X, X
@@ -294,10 +416,10 @@ namespace MiniPokerSolver
                         ShowdownValue(handA, handB, Constants.Ante, Constants.Raise) // B, R, C
                     };
 
-                    for(int i = 0; i < paths.Length; i++)
+                    for(int si = 0; si < paths.Length; si++)
                     {
-                        var chanceToReachSi = ChanceToReachState(A.Table[handA], B.Table[handB], paths[i]);
-                        var valueOfSi = values[i];
+                        var chanceToReachSi = ChanceToReachState(A.Table[handA], B.Table[handB], paths[si]);
+                        var valueOfSi = values[si];
                         //Console.WriteLine($"  State {i}: Chance to reach={chanceToReachSi}, Value={valueOfSi}");
                         totalValue += chanceToReachSi * valueOfSi;
 
