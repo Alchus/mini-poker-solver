@@ -119,55 +119,72 @@ namespace MiniPokerSolver
     }
     public class Solver
     {
+        private (Strategy, double, bool) KeepIfImprovementA(Strategy strategyA, Strategy strategyB, int hand, int spot, double delta, double initialValue)
+        {
+            Strategy trialA = strategyA.DeepCopy();
+            trialA.Table[hand][spot] = Math.Min(1.0, Math.Max(0.0, trialA.Table[hand][spot] + delta));
+            double newValue = Evaluate(trialA, strategyB);
+            
+            if (newValue > initialValue)
+            {
+                return (trialA, newValue, true);
+            }
+            
+            return (strategyA, initialValue, false);
+        }
+
+        private (Strategy, double, bool) KeepIfImprovementB(Strategy strategyA, Strategy strategyB, int hand, int spot, double delta, double initialValue)
+        {
+            Strategy trialB = strategyB.DeepCopy();
+            trialB.Table[hand][spot] = Math.Min(1.0, Math.Max(0.0, trialB.Table[hand][spot] + delta));
+            double newValue = Evaluate(strategyA, trialB);
+            
+            if (newValue < initialValue)  // Note the < comparison since B wants to minimize A's payoff
+            {
+                return (trialB, newValue, true);
+            }
+            
+            return (strategyB, initialValue, false);
+        }
 
         public (Strategy A, Strategy B) Solve_RandomWalk(int iterations = 1001 , int cards = 3, int spots = 4)
         {
             Strategy A = Strategy.Random(cards, spots);
             Strategy B = Strategy.Random(cards, spots);
-            double value = 0;
+            double value = Evaluate(A, B);
 
             for (int i = 0; i < iterations; i++)
             {
-                var trialA = A.Twiddle(cards);
-                var trialVal = Evaluate(trialA, B);
-                if (trialVal > value)
-                {
-                    value = trialVal;
-                    A = trialA;
-                    //Console.WriteLine("Updated A, value is now " + value);
-                }
+                int hand = System.Random.Shared.Next(0, cards);
+                int spot = System.Random.Shared.Next(0, spots);
+                double delta = (System.Random.Shared.NextDouble() - 0.5) * 0.01;
 
-              
-                var trialB = B.Twiddle(cards);
-                trialVal = Evaluate(A, trialB);
-                if (trialVal < value)
-                {
-                    value = trialVal;
-                    B = trialB;
-                    //Console.WriteLine("Updated B, value is now " + value);
-                }
+                // Try improving A's strategy
+                (A, value, _) = KeepIfImprovementA(A, B, hand, spot, delta, value);
 
+                // Try improving B's strategy
+                (B, value, _) = KeepIfImprovementB(A, B, hand, spot, delta, value);
 
-                if ( i % 1000 == 0)
+                if (i % 1000 == 0)
                 {
                     Console.WriteLine("Best Strategy for A (First to act):\n" + A.ToString());
                     Console.WriteLine("Best Strategy for B (Last to act):\n" + B.ToString());
                     Console.WriteLine("Expected Value for A:" + value);
                 }
-               
             }
 
             Console.WriteLine("Best Strategy for A (First to act):\n" + A.ToString());
             Console.WriteLine("Best Strategy for B (Last to act):\n" + B.ToString());
-            Console.WriteLine("Expected Value for A:" +  value);
+            Console.WriteLine("Expected Value for A:" + value);
 
             return (A, B);
         }
 
-        public (Strategy A, Strategy B) Solve_Iterative(int iterations = 1000, int cards = 3, int spots = 4, double temperature = 0.1, double coolingRate = 0.997, double minimumTemperature = 0.00001){
+        public (Strategy A, Strategy B) Solve_Iterative(int iterations = 1000, int cards = 3, int spots = 4, double temperature = 0.1, double coolingRate = 0.997, double minimumTemperature = 0.00001)
+        {
             Strategy A = Strategy.Uniform(cards, spots);
             Strategy B = Strategy.Uniform(cards, spots);
-
+            double currentValue = Evaluate(A, B);
 
             for (int i = 0; i < iterations; i++)
             {
@@ -178,121 +195,53 @@ namespace MiniPokerSolver
                 }
 
                 int entriesUpdatedThisIteration = 0;
-                double currentValue = Evaluate(A, B);
                 double startingValueForA = currentValue;
+
+                // Try to improve A's strategy for each hand and spot
                 foreach (var h in Enumerable.Range(0, cards))
                 {
-
-                    // For each hand h and spot s, calculate the improvement in payoff if we increase the value at that position.
-                    // Also calculate the improvement in payoff if we decrease the value at that position.
-                    // if the value is already at 0.99999 or 0.00001, then skip increasing/decreasing it
-                    // If only one of the two improvements is positive, then we move in that direction.
-                    // If both are positive, we move in the direction that has the highest improvement.
-                    // If both are negative, we do nothing.
-
                     foreach (var s in Enumerable.Range(0, spots))
                     {
-                        Strategy trialA_add = A.DeepCopy();
-                        Strategy trialA_sub = A.DeepCopy();
-                        var delta = temperature;
-
-                        // ADD to A
-                        double improvement_add_A = 0;
-                        double trialVal_add = currentValue;
-                        if (trialA_add.Table[h][s] < 1){
-                            trialA_add.Table[h][s] = Math.Min( 1, trialA_add.Table[h][s] + delta);
-                            trialVal_add = Evaluate(trialA_add, B);
-                            improvement_add_A = trialVal_add - currentValue;
-                        }
-                        
-                        // Do the same for subtracting from A
-                        double improvement_sub_A = 0;           
-                        double trialVal_sub = currentValue;
-                        if (trialA_sub.Table[h][s] > 0.0){
-                            trialA_sub.Table[h][s] = Math.Max( 0.0, trialA_sub.Table[h][s] - delta);
-                            trialVal_sub = Evaluate(trialA_sub, B);
-                            improvement_sub_A = trialVal_sub - currentValue;
-                        }
-
-                        if (improvement_add_A > 0 && improvement_sub_A > 0) // Both are improvements
+                        // Try both positive and negative temperature changes
+                        (Strategy newA, double newValue, bool improved) = KeepIfImprovementA(A, B, h, s, temperature, currentValue);
+                        if (improved)
                         {
-                            // Move in the direction that has the highest improvement.
-                            if (improvement_add_A > improvement_sub_A)
-                            {
-                                A = trialA_add;
-                                currentValue = trialVal_add;
-                                entriesUpdatedThisIteration++;
-                            } else {
-                                A = trialA_sub;
-                                currentValue = trialVal_sub;
-                                entriesUpdatedThisIteration++;
-                            }
-                        } else if (improvement_add_A > 0) // Only Adding is an improvement
-                        {
-                            A = trialA_add;
-                            currentValue = trialVal_add;
+                            A = newA;
+                            currentValue = newValue;
                             entriesUpdatedThisIteration++;
-                        } else if (improvement_sub_A > 0) // Only Subtracting is an improvement
+                        }
+
+                        (newA, newValue, improved) = KeepIfImprovementA(A, B, h, s, -temperature, currentValue);
+                        if (improved)
                         {
-                            A = trialA_sub;
-                            currentValue = trialVal_sub;
+                            A = newA;
+                            currentValue = newValue;
                             entriesUpdatedThisIteration++;
                         }
                     }
-                                        
                 }
 
                 double endingValueForA = currentValue;
 
-                // Do the same for B
+                // Try to improve B's strategy for each hand and spot
                 foreach (var h in Enumerable.Range(0, cards))
                 {
                     foreach (var s in Enumerable.Range(0, spots))
                     {
-                        Strategy trialB_add = B.DeepCopy();
-                        Strategy trialB_sub = B.DeepCopy();
-                        var delta = temperature;
-
-                        // ADD to B
-                        double improvement_add_B = 0;
-                        double trialVal_add = currentValue;
-                        if (trialB_add.Table[h][s] < 1){
-                            trialB_add.Table[h][s] = Math.Min(1, trialB_add.Table[h][s] + delta);
-                            trialVal_add = Evaluate(A, trialB_add);
-                            improvement_add_B = currentValue - trialVal_add; // Note: reversed since B wants to minimize
-                        }
-                        
-                        // Do the same for subtracting from B
-                        double improvement_sub_B = 0;           
-                        double trialVal_sub = currentValue;
-                        if (trialB_sub.Table[h][s] > 0.0){
-                            trialB_sub.Table[h][s] = Math.Max(0.0, trialB_sub.Table[h][s] - delta);
-                            trialVal_sub = Evaluate(A, trialB_sub);
-                            improvement_sub_B = currentValue - trialVal_sub; // Note: reversed since B wants to minimize
-                        }
-
-                        if (improvement_add_B > 0 && improvement_sub_B > 0) // Both are improvements
+                        // Try both positive and negative temperature changes
+                        (Strategy newB, double newValue, bool improved) = KeepIfImprovementB(A, B, h, s, temperature, currentValue);
+                        if (improved)
                         {
-                            // Move in the direction that has the highest improvement
-                            if (improvement_add_B > improvement_sub_B)
-                            {
-                                B = trialB_add;
-                                currentValue = trialVal_add;
-                                entriesUpdatedThisIteration++;
-                            } else {
-                                B = trialB_sub;
-                                currentValue = trialVal_sub;
-                                entriesUpdatedThisIteration++;
-                            }
-                        } else if (improvement_add_B > 0) // Only Adding is an improvement
-                        {
-                            B = trialB_add;
-                            currentValue = trialVal_add;
+                            B = newB;
+                            currentValue = newValue;
                             entriesUpdatedThisIteration++;
-                        } else if (improvement_sub_B > 0) // Only Subtracting is an improvement
+                        }
+
+                        (newB, newValue, improved) = KeepIfImprovementB(A, B, h, s, -temperature, currentValue);
+                        if (improved)
                         {
-                            B = trialB_sub;
-                            currentValue = trialVal_sub;
+                            B = newB;
+                            currentValue = newValue;
                             entriesUpdatedThisIteration++;
                         }
                     }
@@ -307,7 +256,6 @@ namespace MiniPokerSolver
                 if (entriesUpdatedThisIteration == 0)
                 {
                     Console.WriteLine("No improvements this iteration (" + i + "). Temperature: " + temperature);
-                    // Skip the normal cooling for this iteration since we're doing a more aggressive cool
                     temperature = Math.Pow(temperature, 10);
                 }
                 else 
@@ -348,8 +296,8 @@ namespace MiniPokerSolver
 
             }
 
-            Console.WriteLine("Best Strategy for A:\n" + A.ToString());
-            Console.WriteLine("Best Strategy for B:\n" + B.ToString());
+            Console.WriteLine("Best Strategy for A (First to act):\n" + A.ToString());
+            Console.WriteLine("Best Strategy for B (Last to act):\n" + B.ToString());
             Console.WriteLine("Expected Value for A:" + value);
 
             return (A, B);
@@ -364,7 +312,7 @@ namespace MiniPokerSolver
 
         public static readonly Func<double, double> Yes = (d => d);
         public static readonly Func<double, double> No  = (d => 1 - d);
-        public static readonly Func<double, double> _   = (_ => 1.0);
+        public static readonly Func<double, double> __   = (_ => 1.0);
 
         public double ShowdownValue(int handA, int handB, int ante, double calledAmount)
         {
@@ -381,15 +329,15 @@ namespace MiniPokerSolver
         public double Evaluate(Strategy A, Strategy B) {
 
             // Odds of reaching each outcome, for each player
-            (Func<double, double>[] pathA, Func<double, double>[] pathB) S0 = (new Func<double, double>[] { No, _, _, _ },    new Func<double, double>[] { No, _, _, _ });
-            (Func<double, double>[] pathA, Func<double, double>[] pathB) S1 = (new Func<double, double>[] { No, No, _, _ },   new Func<double, double>[] { Yes, _, _, _ });
-            (Func<double, double>[] pathA, Func<double, double>[] pathB) S2 = (new Func<double, double>[] { No, Yes, No, _ },    new Func<double, double>[] { Yes, _, _, _ });
-            (Func<double, double>[] pathA, Func<double, double>[] pathB) S3 = (new Func<double, double>[] { No, Yes, Yes, _ },new Func<double, double>[] { Yes, _, _, No });
-            (Func<double, double>[] pathA, Func<double, double>[] pathB) S4 = (new Func<double, double>[] { No, Yes, Yes, _ },new Func<double, double>[] { Yes, _, _, Yes });
-            (Func<double, double>[] pathA, Func<double, double>[] pathB) S5 = (new Func<double, double>[] { Yes, _, _, _ },   new Func<double, double>[] { _, No, _, _ });
-            (Func<double, double>[] pathA, Func<double, double>[] pathB) S6 = (new Func<double, double>[] { Yes, _, _, _ }, new Func<double, double>[] { _, Yes, No, _ });
-            (Func<double, double>[] pathA, Func<double, double>[] pathB) S7 = (new Func<double, double>[] { Yes, _, _, No }, new Func<double, double>[] { _, Yes, Yes, _ });
-            (Func<double, double>[] pathA, Func<double, double>[] pathB) S8 = (new Func<double, double>[] { Yes, _, _, Yes }, new Func<double, double>[] { _, Yes, Yes, _ });
+            (Func<double, double>[] pathA, Func<double, double>[] pathB) S0 = (new Func<double, double>[] { No, __, __, __ },    new Func<double, double>[] { No, __, __, __ });
+            (Func<double, double>[] pathA, Func<double, double>[] pathB) S1 = (new Func<double, double>[] { No, No, __, __ },   new Func<double, double>[] { Yes, __, __, __ });
+            (Func<double, double>[] pathA, Func<double, double>[] pathB) S2 = (new Func<double, double>[] { No, Yes, No, __ },    new Func<double, double>[] { Yes, __, __, __ });
+            (Func<double, double>[] pathA, Func<double, double>[] pathB) S3 = (new Func<double, double>[] { No, Yes, Yes, __ },new Func<double, double>[] { Yes, __, __, No });
+            (Func<double, double>[] pathA, Func<double, double>[] pathB) S4 = (new Func<double, double>[] { No, Yes, Yes, __ },new Func<double, double>[] { Yes, __, __, Yes });
+            (Func<double, double>[] pathA, Func<double, double>[] pathB) S5 = (new Func<double, double>[] { Yes, __, __, __ },   new Func<double, double>[] { __, No, __, __ });
+            (Func<double, double>[] pathA, Func<double, double>[] pathB) S6 = (new Func<double, double>[] { Yes, __, __, __ }, new Func<double, double>[] { __, Yes, No, __ });
+            (Func<double, double>[] pathA, Func<double, double>[] pathB) S7 = (new Func<double, double>[] { Yes, __, __, No }, new Func<double, double>[] { __, Yes, Yes, __ });
+            (Func<double, double>[] pathA, Func<double, double>[] pathB) S8 = (new Func<double, double>[] { Yes, __, __, Yes }, new Func<double, double>[] { __, Yes, Yes, __ });
 
             var paths = new[] { S0, S1, S2, S3, S4, S5, S6, S7, S8};
 
