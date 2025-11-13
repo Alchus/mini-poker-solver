@@ -7,15 +7,15 @@ namespace CFRMiniPoker
         static void Main(string[] args)
         {
             // Create the game and CFR solver
-            var game = new KuhnPoker13Game();
+            var game = new LiarsDice();
             var solver = new CounterfactualRegretMinimizer<string>(game);
 
             // Training parameters
-            const string outputFile = "kuhn_poker13_strategy.txt";
+            const string outputFile = "LiarsDice.txt";
 
-            Console.WriteLine("Starting Kuhn Poker training...");
+            Console.WriteLine("Starting Liars Dice training...");
 
-                solver.Solve(outputFile, itersPerSave: 100000, itersPerUpdate: 10000, maxIterations: 100000000);
+                solver.Solve(outputFile, itersPerSave: 1, itersPerUpdate: 1, maxIterations: 1);
 
             Console.WriteLine("Training complete!");
         }
