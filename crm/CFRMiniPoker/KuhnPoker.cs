@@ -173,4 +173,4 @@ public class KuhnPokerGame : IGame<string>
         if (_cards[1] == "Q") return 1;
         throw new InvalidOperationException("Could not determine winning player");
     }
-} 
+}

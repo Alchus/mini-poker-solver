@@ -8,16 +8,24 @@ namespace CFRMiniPoker
         {
             // Create the game and CFR solver
             var game = new LiarsDice();
-            var solver = new CounterfactualRegretMinimizer<string>(game);
+            var solver = new CounterfactualRegretMinimizer<byte>(game);
 
-            // Training parameters
-            const string outputFile = "LiarsDice.txt";
+            var trainer = new Trainer<LiarsDice, byte>(game, solver);
 
-            Console.WriteLine("Starting Liars Dice training...");
+            trainer.TrainAndEvaluateLoop(iterationsPerStep: 2000000, maxSteps: int.MaxValue);
 
-                solver.Solve(outputFile, itersPerSave: 1, itersPerUpdate: 1, maxIterations: 1);
 
-            Console.WriteLine("Training complete!");
+
+            //// Training parameters
+            //const string outputFile = "LiarsDice.txt";
+
+            //solver.TryLoad(outputFile);
+
+            //Console.WriteLine("Starting Liars Dice training...");
+
+            //solver.Solve(outputFile, itersPerSave: 500000, itersPerUpdate: 1000, maxIterations: int.MaxValue);
+
+            //Console.WriteLine("Training complete!");
         }
     }
 }

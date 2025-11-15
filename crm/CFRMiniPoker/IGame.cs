@@ -67,4 +67,4 @@ public interface IGame<T>
     /// </summary>
     /// <returns>A list of possible actions that the player can make</returns>
     IReadOnlyList<T> Actions();
-} 
+}

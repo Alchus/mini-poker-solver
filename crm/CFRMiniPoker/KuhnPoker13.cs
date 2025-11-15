@@ -196,4 +196,4 @@ public class KuhnPoker13Game : IGame<string>
         int rank1 = HAND_RANKS[_cards[1]];
         return rank0 > rank1 ? 0 : 1;
     }
-} 
+}

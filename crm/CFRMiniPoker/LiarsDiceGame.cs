@@ -10,22 +10,25 @@ namespace CFRMiniPoker
     /// <summary>
     /// Implementation of a two-player Liar's Dice variant.
     /// - Each player has five dice.
-    /// - Actions are strings: "CHALLENGE", "SPOT_ON", or a bid encoded as digits without 'x' (e.g. "11" for 1x1, "106" for 10x6).
+    /// - Actions are strings: "CHALLENGE", "SPOT_ON", or a bid encoded as digits (e.g. "11" for 1x1, "106" for 10x6).
     /// - Internally bids are represented as bytes: 11 = 1x1, 106 = 10x6.
     /// - Maximum bid is 10x6. After 10x6 only "CHALLENGE" and "SPOT_ON" are legal responses.
     /// - Player 0 always goes first.
     /// - Hands are stored as integers formed by concatenating the dice faces in descending order (e.g. 66521).
     /// - Resolution rules (simple zero-sum payoffs):
-    ///   * CHALLENGE: if actual count >= bid count => bidder wins (+1), else challenger wins (+1).
-    ///   * SPOT_ON: if actual count == bid count => caller (spot-on caller) wins (+1), else caller loses (+1).
+    ///   * CHALLENGE or SPOT_ON: if actual count >= bid count => bidder wins (+1), else challenger wins (+1).
     /// </summary>
-    internal class LiarsDice : IGame<string>
+    internal class LiarsDice : IGame<byte>
     {
         private static readonly Random _random = new Random();
 
+        private const int CHALLENGE = 254;
+        private const int SPOT_ON = 255;
+
         private const int DICE_PER_PLAYER = 5;
-        private const int MAX_COUNT = 6;
+        private const int MAX_COUNT = 6;   
         private const int MAX_FACE = 6;
+        private const int MAX_BID_COUNT = 20;
 
         // Cache for all bid byte codes so they are only computed once
         private static List<byte>? _allBidsBytesCache;
@@ -34,7 +37,16 @@ namespace CFRMiniPoker
         private static readonly ConcurrentDictionary<int, int> _countFaceCache = new ConcurrentDictionary<int, int>();
 
         private int[] _hands; // stored as concatenated digits in descending order, e.g. 66521
-        private List<string> _history;
+
+        // Replace per-face history with last-three-bids history. Encoding: c*10+f (e.g. three 4's -> 34)
+        private byte _bid_hist_1; // most recent
+        private byte _bid_hist_2;
+        private byte _bid_hist_3; // oldest of the three
+
+        // Total number of bids made in the round (used for the 10-bid rule)
+        private int _bidCountTotal;
+        // Last non-bid terminal action when game ends ("CHALLENGE" or "SPOT_ON")
+        private byte _lastTerminalAction;
         private int _player;
         private bool _end;
         private int _winner; // 0 or 1 when _end == true
@@ -45,7 +57,11 @@ namespace CFRMiniPoker
         public LiarsDice()
         {
             _hands = new int[2];
-            _history = new List<string>();
+            _bid_hist_1 = 0;
+            _bid_hist_2 = 0;
+            _bid_hist_3 = 0;
+            _bidCountTotal = 0;
+            _lastTerminalAction = 0;
             _player = 0;
             _end = false;
             _winner = -1;
@@ -69,7 +85,11 @@ namespace CFRMiniPoker
                 _hands[p] = DiceArrayToInt(dice);
             }
 
-            _history.Clear();
+            _bid_hist_1 = 0;
+            _bid_hist_2 = 0;
+            _bid_hist_3 = 0;
+            _bidCountTotal = 0;
+            _lastTerminalAction = 0;
             _player = 0;
             _end = false;
             _winner = -1;
@@ -79,12 +99,16 @@ namespace CFRMiniPoker
         /// Returns a deep copy of this game state.
         /// </summary>
         /// <returns>A deep copy of this LiarsDice instance.</returns>
-        public IGame<string> DeepCopy()
+        public IGame<byte> DeepCopy()
         {
             var copy = new LiarsDice
             {
                 _hands = (int[])_hands.Clone(),
-                _history = new List<string>(_history),
+                _bid_hist_1 = _bid_hist_1,
+                _bid_hist_2 = _bid_hist_2,
+                _bid_hist_3 = _bid_hist_3,
+                _bidCountTotal = _bidCountTotal,
+                _lastTerminalAction = _lastTerminalAction,
                 _player = _player,
                 _end = _end,
                 _winner = _winner
@@ -101,11 +125,16 @@ namespace CFRMiniPoker
         public string InformationSet()
         {
             var sb = new StringBuilder();
-            sb.Append($"[Player:{_player},Hand:{_hands[_player]},History:");
-            if (_history.Count > 0)
-            {
-                sb.Append(string.Join(",", _history));
+            sb.Append($"[Hand:{_hands[_player]}, ");
+
+            if (_bidCountTotal == MAX_BID_COUNT) {
+                sb.Append("TL!, ");
             }
+
+            
+            // History reported as three most recent bids, with _bid_hist_1 being the most recent (printed first)
+            sb.Append("History:");
+            sb.Append($"{_bid_hist_1},{_bid_hist_2},{_bid_hist_3}");
             sb.Append("]");
             return sb.ToString();
         }
@@ -144,51 +173,40 @@ namespace CFRMiniPoker
         ///   plus "CHALLENGE" and "SPOT_ON". If B is the maximum bid (10x6) then only "CHALLENGE" and "SPOT_ON" are legal.
         /// </summary>
         /// <returns>A deterministic list of legal action strings.</returns>
-        public IReadOnlyList<string> Actions()
+        public IReadOnlyList<byte> Actions()
         {
             if (_end)
             {
-                return Array.Empty<string>();
+                return Array.Empty<byte>();
             }
 
-            if (_history.Count == 0)
+            // New rule: if there have already been 20 bids made, only CHALLENGE and SPOT_ON are allowed
+            if (_bidCountTotal >= MAX_BID_COUNT)
             {
-                // Return all bids as numeric strings (e.g. "11","12",...,"106")
-                return AllBids();
+                return new List<byte> { CHALLENGE, SPOT_ON };
             }
 
-            var last = _history[^1];
-            if (IsBidString(last))
+            // Help the solver a little: If the last bid is impossible, only allow CHALLENGE
+            int total_dice = DICE_PER_PLAYER * NumPlayers();
+            if (_bid_hist_1 != 0)
             {
-                byte lastByte = ParseBidToByte(last);
-
-                // Make impossible bids (given current player's private hand) only challengeable
-                int lastCount = lastByte / 10;
-                int lastFace = lastByte % 10;
-                int ownCount = CountFaceInHand(_hands[_player], lastFace);
-                if (lastCount > ownCount + DICE_PER_PLAYER)
+                int last_bid_count = _bid_hist_1 / 10;
+                int last_bid_face = _bid_hist_1 % 10;
+                if (last_bid_count > ((DICE_PER_PLAYER * (NumPlayers() - 1)) +  CountFaceInHand(_hands[_player], last_bid_face)))
                 {
-                    // The bid asserts more of the face than could exist given opponent's maximum contribution -> only challenge
-                    return new List<string> { "CHALLENGE" };
+                    return new List<byte> { CHALLENGE };
                 }
-
-                if (lastByte == (byte)(MAX_COUNT * 10 + MAX_FACE))
-                {
-                    // Maximum bid reached -> only challenge or spot on allowed
-                    return new List<string> { "CHALLENGE", "SPOT_ON" };
-                }
-
-                // Compare bids directly as bytes for speed
-                var higherBytes = AllBidsBytes().Where(b => b > lastByte).ToList();
-
-                var result = higherBytes.Select(b => b.ToString()).ToList();
-                result.Add("CHALLENGE");
-                result.Add("SPOT_ON");
-                return result;
             }
 
-            // If last action was CHALLENGE or SPOT_ON and game not marked end, no further moves should be allowed.
-            return Array.Empty<string>();
+
+            var legalmoves = AllBidsBytes().Where(b => b > _bid_hist_1).ToList();
+            if (_bid_hist_1 != 0)
+            {
+                legalmoves.Add(CHALLENGE);
+                legalmoves.Add(SPOT_ON);
+            }
+            return legalmoves;
+
         }
 
         /// <summary>
@@ -197,43 +215,34 @@ namespace CFRMiniPoker
         /// - If move is "CHALLENGE" or "SPOT_ON", the game is resolved immediately.
         /// </summary>
         /// <param name="move">The action string to perform.</param>
-        public void MakeMove(string move)
+        public void MakeMove(byte move)
         {
             if (IsTerminalState())
             {
                 throw new InvalidOperationException("Cannot make move in terminal state");
             }
 
-            if (string.IsNullOrWhiteSpace(move))
-            {
-                throw new ArgumentException("Move must be non-empty", nameof(move));
-            }
-
-            if (IsBidString(move))
-            {
-                // Just record the bid and switch player
-                _history.Add(move);
-                _player = 1 - _player;
-                return;
-            }
-
+                
             // move is CHALLENGE or SPOT_ON -> resolve immediately
-            if (move == "CHALLENGE")
+            if (move == CHALLENGE)
             {
                 ResolveChallenge();
-                _history.Add(move);
+                _lastTerminalAction = move;
                 _end = true;
             }
-            else if (move == "SPOT_ON")
+            else if (move == SPOT_ON)
             {
                 ResolveSpotOn();
-                _history.Add(move);
+                _lastTerminalAction = move;
                 _end = true;
             }
-            else
-            {
-                throw new ArgumentException($"Unknown move: {move}", nameof(move));
-            }
+            
+            // Record the bid: shift history and update the last bid info
+            _bid_hist_3 = _bid_hist_2;
+            _bid_hist_2 = _bid_hist_1;
+            _bid_hist_1 = move;
+            _bidCountTotal++;
+            _player = 1 - _player;
         }
 
         /// <summary>
@@ -254,23 +263,10 @@ namespace CFRMiniPoker
                 throw new InvalidOperationException("Invalid winner");
             }
 
-            var last = _history.Last();
             double[] result = new double[2];
-
-            if (last == "CHALLENGE")
-            {
-                result[_winner] = 1;
-                result[1 - _winner] = -1;
-                return result;
-            }
-            else if (last == "SPOT_ON")
-            {
-                result[_winner] = 1;
-                result[1 - _winner] = -1;
-                return result;
-            }
-
-            throw new InvalidOperationException("Unknown terminal action");
+            result[_winner] = 1;
+            result[1 - _winner] = -1;
+            return result;
         }
 
         // --------------------- Private helpers ---------------------
@@ -317,19 +313,7 @@ namespace CFRMiniPoker
             return (count, face);
         }
 
-        /// <summary>
-        /// Returns true if the string is a bid (decimal number encoding c*10+f).
-        /// </summary>
-        private static bool IsBidString(string s)
-        {
-            if (string.IsNullOrEmpty(s)) return false;
-            if (!int.TryParse(s, out int v)) return false;
-            int c = v / 10;
-            int f = v % 10;
-            return c >= 1 && c <= MAX_COUNT && f >= 1 && f <= MAX_FACE;
-        }
 
-        
         /// <summary>
         /// Generates the full list of all possible bids in deterministic order using byte codes:
         /// ascending by count (1..MAX_COUNT) then face (1..MAX_FACE).
@@ -353,14 +337,7 @@ namespace CFRMiniPoker
             return _allBidsBytesCache;
         }
 
-        /// <summary>
-        /// Returns bids as string representations (no 'x' character), e.g. "11","106".
-        /// </summary>
-        /// <returns>List of bid strings.</returns>
-        private static List<string> AllBids()
-        {
-            return AllBidsBytes().Select(b => b.ToString()).ToList();
-        }
+        
 
         /// <summary>
         /// Resolves a CHALLENGE action: compares the last bid to the actual total count across both hands,
@@ -368,13 +345,13 @@ namespace CFRMiniPoker
         /// </summary>
         private void ResolveChallenge()
         {
-            var lastBid = _history.LastOrDefault(h => IsBidString(h));
-            if (lastBid == null)
+            if (_bid_hist_1 == 0)
             {
                 throw new InvalidOperationException("No bid to challenge");
             }
 
-            var (count, face) = ParseBid(lastBid);
+            int count = _bid_hist_1 / 10;
+            int face = _bid_hist_1 % 10;
             int actual = TotalFaceCount(face);
 
             // The bidder is the player who made the last bid: that is 1 - _player (current player issued the CHALLENGE).
@@ -399,22 +376,23 @@ namespace CFRMiniPoker
         /// </summary>
         private void ResolveSpotOn()
         {
-            var lastBid = _history.LastOrDefault(h => IsBidString(h));
-            if (lastBid == null)
+            if (_bid_hist_1 == 0)
             {
-                throw new InvalidOperationException("No bid to spot on");
+                throw new InvalidOperationException("No bid to challenge");
             }
 
-            var (count, face) = ParseBid(lastBid);
+            int count = _bid_hist_1 / 10;
+            int face = _bid_hist_1 % 10;
             int actual = TotalFaceCount(face);
 
-            int caller = _player;
+            // The bidder is the player who made the last bid: that is 1 - _player (current player issued the CHALLENGE).
             int bidder = 1 - _player;
+            int challenger = _player;
 
             if (actual == count)
             {
                 // spot-on correct => caller wins
-                _winner = caller;
+                _winner = challenger;
             }
             else
             {
@@ -467,5 +445,7 @@ namespace CFRMiniPoker
             _countFaceCache[key] = count;
             return count;
         }
+
+        
     }
 }
