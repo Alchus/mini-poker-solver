@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text;
 
 /// <summary>
 /// Class to perform Counterfactual Regret Minimization on multiplayer games.
@@ -73,7 +74,7 @@ public class CounterfactualRegretMinimizer<TAction> : CFRPlayer<TAction>, IStrat
     /// <param name="iterations">The number of iterations to run</param>
     public void Train(int iterations)
     {
-        // Run iterations in parallel using 8 threads. Each iteration is independent and selects
+        // Run iterations in parallel using threads. Each iteration is independent and selects
         // which player is being trained based on the iteration index.
         var options = new ParallelOptions { MaxDegreeOfParallelism = 32 };
 
@@ -232,19 +233,48 @@ public class CounterfactualRegretMinimizer<TAction> : CFRPlayer<TAction>, IStrat
     /// <param name="filename">The file to save to</param>
     public void Save(string filename)
     {
-        using (var writer = new StreamWriter(filename))
+        const long MaxBytes = 50L * 1024 * 1024; // 50 MiB
+
+        var infoStates = _aggregateRegrets.Keys.ToList();
+        infoStates.Sort();
+
+        int part = 0;
+        string currentFile() => part == 0 ? filename : $"{filename}_{part}";
+
+        StreamWriter writer = null;
+        try
         {
+            writer = new StreamWriter(currentFile(), false, Encoding.UTF8);
             writer.WriteLine("REGRETS");
-            var infoStates = _aggregateRegrets.Keys.ToList();
-            infoStates.Sort();
 
             foreach (var infoState in infoStates)
             {
-                writer.Write(infoState + "\t");
-                writer.WriteLine(string.Join(" ", _aggregateRegrets[infoState]));
+                string line = infoState + "\t" + string.Join(" ", _aggregateRegrets[infoState]) + Environment.NewLine;
+                long byteCount = Encoding.UTF8.GetByteCount(line);
+
+                // If writing this line would exceed the max file size, finish this file with CONTINUED and start a new one
+                if (writer.BaseStream.Length + byteCount > MaxBytes)
+                {
+                    writer.WriteLine("CONTINUED");
+                    writer.Dispose();
+                    writer = null;
+
+                    part++;
+                    writer = new StreamWriter(currentFile(), false, Encoding.UTF8);
+                    writer.WriteLine("REGRETS");
+                }
+
+                writer.Write(line);
             }
+
+            // Write END on the last file
             writer.WriteLine("END");
         }
+        finally
+        {
+            writer?.Dispose();
+        }
+
     }
 
     /// <summary>
@@ -259,26 +289,57 @@ public class CounterfactualRegretMinimizer<TAction> : CFRPlayer<TAction>, IStrat
         {
             return false;
         }
-        using (var reader = new StreamReader(filename))
+
+        _aggregateRegrets.Clear();
+
+        int part = 0;
+        bool finished = false;
+
+        while (!finished)
         {
-            string buffer = reader.ReadLine();
-            if (buffer != "REGRETS")
+            string current = part == 0 ? filename : $"{filename}_{part}";
+            if (!File.Exists(current))
             {
-                Console.Error.WriteLine($"Could not parse file {filename}");
+                // If first part missing, fail. If subsequent part missing while expecting CONTINUED, fail.
                 return false;
             }
 
-            _aggregateRegrets.Clear();
-            while ((buffer = reader.ReadLine()) != "END")
+            using (var reader = new StreamReader(current, Encoding.UTF8))
             {
-                var parts = buffer.Split('\t');
-                string key = parts[0];
-                var values = parts[1].Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(double.Parse)
-                    .ToList();
-                _aggregateRegrets[key] = values;
+                string header = reader.ReadLine();
+                if (header != "REGRETS")
+                {
+                    Console.Error.WriteLine($"Could not parse file {current}");
+                    return false;
+                }
+
+                string buffer;
+                while ((buffer = reader.ReadLine()) != null)
+                {
+                    if (buffer == "END")
+                    {
+                        finished = true;
+                        break;
+                    }
+                    if (buffer == "CONTINUED")
+                    {
+                        // move on to next part
+                        break;
+                    }
+
+                    var parts = buffer.Split('\t');
+                    if (parts.Length < 2) continue;
+                    string key = parts[0];
+                    var values = parts[1].Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(double.Parse)
+                        .ToList();
+                    _aggregateRegrets[key] = values;
+                }
             }
+
+            part++;
         }
+
         Console.WriteLine("Loaded file");
         return true;
     }

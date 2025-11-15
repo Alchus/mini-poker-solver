@@ -33,6 +33,8 @@ namespace CFRMiniPoker
                 Console.WriteLine($"Could not load strategy file {filename}, starting from scratch.");
             }
 
+            //_solver.Save(filename);
+
             var previousSolver = _solver.FreezeStrategy();
 
             Console.WriteLine($"Beginning training. Will take {iterationsPerStep} steps before save and evaluating.");
